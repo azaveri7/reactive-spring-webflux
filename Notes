@@ -3,3 +3,161 @@ GitHub repo
 ===========
 
 https://github.com/dilipsundarraj1/reactive-spring-webflux
+
+=========================
+Docker compose for Redis
+=========================
+1. Save this docker-compose.yml
+
+version: '3'
+services:
+  redis:
+    container_name: redis
+    hostname: redis
+    image: redis:6.2
+    ports:
+    - 6379:6379
+2. Run this command. docker-compose up
+
+3. Launch a separate terminal to access redis-cli
+
+docker exec -it redis bash
+
+redis-cli
+
+===================================
+Redis commands
+===================================
+##########################
+1. Store key value pair
+##########################
+-------------------------
+set a b
+
+get a
+
+-------------------------
+set bo:pipeline:flag 0
+-------------------------
+get bo:pipeline:flag
+
+"0"
+
+######################
+2. Access all keys
+######################
+---------------------
+keys *
+
+127.0.0.1:6379> keys *
+1) "bo:pipeline:flag"
+-------------------------
+Pattern matching keys
+-------------------------
+keys bo*
+
+-------------------------
+
+Use scan command
+
+It only returns only a page of keys
+like pagination
+
+######################
+3. Delete keys
+######################
+
+127.0.0.1:6379> del bo:pipeline:flag
+(integer) 1
+127.0.0.1:6379> del bo:pipeline:flag
+(integer) 0
+127.0.0.1:6379>
+
+------------------------
+flushdb
+
+it removes all the keys
+-------------------------
+######################
+4. Expiring keys
+######################
+--------------------------------------------
+127.0.0.1:6379> set a b ex 10
+OK
+127.0.0.1:6379> get a
+"b"
+127.0.0.1:6379> get a
+"b"
+127.0.0.1:6379> get a
+(nil)
+
+Above key a expires after 10 seconds,
+meaning redis deletes key after 10 secs.
+--------------------------------------------
+
+127.0.0.1:6379> set a b ex 30
+OK
+127.0.0.1:6379> ttl a
+(integer) 27
+127.0.0.1:6379> ttl a
+(integer) 24
+127.0.0.1:6379> ttl a
+(integer) 21
+127.0.0.1:6379> ttl a
+(integer) 4
+127.0.0.1:6379> ttl a
+(integer) -2
+127.0.0.1:6379> ttl a
+(integer) -2
+
+ttl command gives how many seconds remaining
+till the key expires.
+
+-------------------------------------------------
+To extend the time of a key, use expire command
+
+expire a 600
+-------------------------------------------------
+########################
+5. Exists command
+########################
+127.0.0.1:6379> set a b ex 10
+OK
+127.0.0.1:6379> exists a
+(integer) 1
+127.0.0.1:6379> exists a
+(integer) 1
+127.0.0.1:6379> exists a
+(integer) 0
+
+########################
+6. Increment command
+########################
+--------------------------------------
+127.0.0.1:6379> set prod:ipad:value 0
+OK
+127.0.0.1:6379> incr prod:ipad:value
+(integer) 1
+127.0.0.1:6379> incr prod:ipad:value
+(integer) 2
+127.0.0.1:6379> incr prod:ipad:value
+(integer) 3
+--------------------------------------
+127.0.0.1:6379> set a 2.01
+OK
+127.0.0.1:6379> incr a
+(error) ERR value is not an integer or out of range
+127.0.0.1:6379> incrbyfloat a .3
+"2.31"
+--------------------------------------
+########################
+7. Decrement command
+########################
+127.0.0.1:6379> set prod:ipad:value 7
+OK
+127.0.0.1:6379> decr prod:ipad:value
+(integer) 6
+127.0.0.1:6379> decr prod:ipad:value
+(integer) 5
+127.0.0.1:6379> decr prod:ipad:value
+(integer) 4
