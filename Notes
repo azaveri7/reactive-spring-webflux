@@ -322,5 +322,120 @@ public void updateAppManifestToRedis(Application application) throws IOException
 	}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-2.
+2. Adding Athena results in Redis
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+private String CUSTOMER_INFO_CALCULATION = " with_channel AS ( "
+			+ " SELECT {USER_ID_COLUMN_NAME}, {REFERRER_BY_CATEGORY}, {REFERRER_BY_MEDIUM_COLUMN_NAME}, {REFERRER_BY_TYPE_COLUMN_NAME}, {REFERRER_BY_CAMPAIGN_COLUMN_NAME}, "
+			+ " {REFERRAL_COLUMN_NAME}, {CITY_COLUMN_NAME}, {COUNTRY_NAME_COLUMN_NAME}, {OS_NAME_COLUMN_NAME}, {BROWSER_NAME_COLUMN_NAME}, "
+			+ " {DEVICE_BRAND_COLUMN_NAME}, {USER_SINCE_COLUMN_NAME} FROM ( "
+			+ " SELECT ROW_NUMBER() OVER ( PARTITION BY {USER_ID_COLUMN_NAME} ORDER BY event_date DESC ) AS RN, "
+			+ " {USER_ID_COLUMN_NAME}, {REFERRER_BY_CATEGORY}, {REFERRER_BY_MEDIUM_COLUMN_NAME}, {REFERRER_BY_TYPE_COLUMN_NAME}, {REFERRER_BY_CAMPAIGN_COLUMN_NAME}, "
+			+ " {REFERRAL_COLUMN_NAME}, {CITY_COLUMN_NAME}, {COUNTRY_NAME_COLUMN_NAME}, {OS_NAME_COLUMN_NAME}, {BROWSER_NAME_COLUMN_NAME}, "
+			+ " {DEVICE_BRAND_COLUMN_NAME}, {USER_SINCE_COLUMN_NAME} FROM {SESSION_TABLE_NAME} where {USER_ID_COLUMN_NAME} IN ( "
+			+ " SELECT {USER_ID_COLUMN_NAME} FROM user_id_calculation )) WHERE RN = 1 ), "
+			+ " with_conversions_and_leads_count AS ( " + " SELECT {USER_ID_COLUMN_NAME}, "
+			+ " SUM ( CASE WHEN {COHORT_TYPE} = '{LEAD_VALUE}' THEN {COHORT_EVENTS_OCCURRENCE_COUNT} ELSE 0 END ) as leads, "
+			+ " SUM ( CASE WHEN {COHORT_TYPE} = '{CONVERSION_VALUE}' THEN {COHORT_EVENTS_OCCURRENCE_COUNT} ELSE 0 END ) as conversions "
+			+ " FROM {SESSION_TABLE_NAME} WHERE {USER_ID_COLUMN_NAME} IN ( "
+			+ " SELECT {USER_ID_COLUMN_NAME} FROM user_id_calculation ) and {DATE_WHERE_CLAUSE} GROUP BY 1 ) "
+			+ " SELECT w.{USER_ID_COLUMN_NAME}, u.{PERSONA_FIRSTNAME_COLUMN_NAME}, u.{PERSONA_LASTNAME_COLUMN_NAME}, u.{PERSONA_EMAIL_COLUMN_NAME}, u.{PERSONA_NUMBER_COLUMN_NAME}, "
+			+ " ch.{REFERRER_BY_CATEGORY}, w.conversions, w.leads, ch.{USER_SINCE_COLUMN_NAME}, "
+			+ " ch.{REFERRER_BY_MEDIUM_COLUMN_NAME}, ch.{REFERRER_BY_TYPE_COLUMN_NAME}, ch.{REFERRER_BY_CAMPAIGN_COLUMN_NAME}, ch.{REFERRAL_COLUMN_NAME}, "
+			+ " ch.{OS_NAME_COLUMN_NAME}, ch.{DEVICE_BRAND_COLUMN_NAME}, ch.{BROWSER_NAME_COLUMN_NAME}, ch.{CITY_COLUMN_NAME}, ch.{COUNTRY_NAME_COLUMN_NAME} "
+			+ " FROM with_conversions_and_leads_count w, {USER_TABLE_NAME} u, with_channel ch, user_id_calculation uc"
+			+ " where w.{USER_ID_COLUMN_NAME} = u.{USER_ID_COLUMN_NAME} "
+			+ " and w.{USER_ID_COLUMN_NAME} = ch.{USER_ID_COLUMN_NAME} "
+			+ " and w.{USER_ID_COLUMN_NAME} = uc.{USER_ID_COLUMN_NAME} {LIMIT_CLAUSE} ";
+
+LOGGER.info("reportDataQuery {}", reportDataQuery);
+
+String redisData = redisUtil.getQueryReponse(reportDataQuery);
+
+if (reportRequestDTO.isForce() || Objects.isNull(redisData)) {
+				try {
+					queryExecutionId = athenaUtil.submitAthenaQuery(amazonAthenaClient, reportDataQuery);
+					LOGGER.info("queryExecutionId 	" + queryExecutionId);
+					athenaUtil.waitForQueryToComplete(amazonAthenaClient, queryExecutionId);
+					LOGGER.info("Exiting getReportData service");
+					response = processReportingRows(amazonAthenaClient, queryExecutionId);
+					populateTotalColumns(response, reportType);
+					redisUtil.addedQueryReponse(reportDataQuery, GenericUtility.convertToByteString(response));
+					return response;
+				} catch (Exception e) {
+					LOGGER.error(" Error {}", e);
+					return new ReportResponseDTO(GenericUtility.getErrorObject(e));
+				}
+			} else {
+				LOGGER.info("Exiting getReportData service from cache");
+				return (ReportResponseDTO) GenericUtility.convertFromByteString(redisData);
+			}
+
+public static Object convertFromByteString(String byteString) throws IOException, ClassNotFoundException {
+      		final byte[] bytes = Base64.getDecoder().decode(byteString);
+      		try (ByteArrayInputStream bis = new ByteArrayInputStream(bytes); ObjectInput in = new ObjectInputStream(bis)) {
+      			return in.readObject();
+      		}
+}
+
+public String getQueryReponse(String keyString) throws IOException, NoSuchAlgorithmException {
+      		String redisKey = GenericUtility.getMD5Hash(keyString);
+      		return getValue(redisKey);
+}
+
+public String getValue(String key) {
+		key = RedisConstants.REDIS_KEY_PREFIX + key;
+		key = key.toLowerCase();
+		LOGGER.info("get key:=> {}", key);
+		return jedisCluster.get(key);
+}
+
+public static String getMD5Hash(String input) throws NoSuchAlgorithmException {
+		MessageDigest md = MessageDigest.getInstance("MD5");
+		byte[] messageDigest = md.digest(input.getBytes());
+		BigInteger no = new BigInteger(1, messageDigest);
+		String hashtext = no.toString(16);
+		while (hashtext.length() < 32) {
+			hashtext = "0" + hashtext;
+		}
+		return hashtext;
+}
+
+public static String convertToByteString(Object object) throws IOException {
+		try (ByteArrayOutputStream bos = new ByteArrayOutputStream(); ObjectOutput out = new ObjectOutputStream(bos)) {
+			out.writeObject(object);
+			final byte[] byteArray = bos.toByteArray();
+			return Base64.getEncoder().encodeToString(byteArray);
+		}
+}
+
+public void addedQueryReponse(String keyString, String byteString) throws IOException, NoSuchAlgorithmException {
+		String redisKey = GenericUtility.getMD5Hash(keyString);
+		setValueWithTtl(redisKey, byteString, ttl);
+}
+
+public void setValueWithTtl(String key, String value, long ttlInSecond) {
+		if (value != null) {
+			key = RedisConstants.REDIS_KEY_PREFIX + key;
+			key = key.toLowerCase();
+			LOGGER.info("set key:=> {}, value:=> {}, expiry {}", key, value, ttlInSecond);
+			jedisCluster.set(key.toLowerCase(), value);
+			jedisCluster.expire(key.toLowerCase(), (int) ttlInSecond);
+		}
+}
+
+@Value("${redis.query.ttl}")
+private long ttl;
+
+redis.query.ttl=${REDIS_QUERY_TTL:600}
+
+import redis.clients.jedis.JedisCluster;
+
+@Autowired
+JedisCluster jedisCluster;
+
+public long getTTL(String key) {
+		key = RedisConstants.REDIS_KEY_PREFIX + key;
+		key = key.toLowerCase();
+		LOGGER.info("get key:=> {}", key);
+		return jedisCluster.ttl(key);
+}
