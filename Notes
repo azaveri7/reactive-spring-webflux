@@ -161,3 +161,166 @@ OK
 (integer) 5
 127.0.0.1:6379> decr prod:ipad:value
 (integer) 4
+###########################
+8. Redis commands practice
+###########################
+redis.io/commands
+###########################
+9. HashSet
+##########################################
+127.0.0.1:6379> hset user:1 name anand age 36 city rajkot
+(integer) 3
+127.0.0.1:6379> keys *
+1) "a"
+2) "user:1"
+-----------------------------------------------------------
+127.0.0.1:6379> get user:1:name
+(nil)
+127.0.0.1:6379> type user:1
+hash
+127.0.0.1:6379> hget user:1:name
+(error) ERR wrong number of arguments for 'hget' command
+127.0.0.1:6379> hget user:1 name
+"anand"
+-----------------------------------------------------------
+127.0.0.1:6379> hgetall user:1
+1) "name"
+2) "anand"
+3) "age"
+4) "36"
+5) "city"
+6) "rajkot"
+-----------------------------------------------------------
+127.0.0.1:6379> hkeys user:1
+1) "name"
+2) "age"
+3) "city"
+-----------------------------------------------------------
+127.0.0.1:6379> hvals user:1
+1) "anand"
+2) "36"
+3) "rajkot"
+-----------------------------------------------------------
+127.0.0.1:6379> hexists user:1 name
+(integer) 1
+127.0.0.1:6379> hexists user:1 country
+(integer) 0
+-----------------------------------------------------------
+127.0.0.1:6379> hdel user:1 age
+(integer) 1
+127.0.0.1:6379> hgetall user:1
+1) "name"
+2) "anand"
+3) "city"
+4) "rajkot"
+-----------------------------------------------------------
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+our usuage:
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+1. Storing application data and manifest data into Redis
+
+public void updateApplicationsDataToRedis(Application application) {
+		String keyProd = RedisConstants.APPLICATION_KEY_PREFIX + application.getApiKeyProd();
+    // keyProd = app:YSTPHBC7754SAAD
+		if (application.getStatus() != 1 || application.getIsDeleted() == 1) {
+			deleteKey(keyProd);
+		} else {
+			deleteKey(keyProd);
+			// Remove deliver stream filed from redis
+//			setRedisValue(keyProd, RedisConstants.DELIVER_STREAM_FIELD, application.getDeliveryStream());
+			setRedisValue(keyProd, RedisConstants.APP_BUNDLE_ID, application.getBundleId());
+			setRedisValue(keyProd, RedisConstants.APP_TYPE, application.getType());
+			setRedisValue(keyProd, RedisConstants.APP_NAME, application.getName());
+			setRedisValue(keyProd, RedisConstants.APP_ID, application.getApplicationId());
+
+		}
+	}
+
+  public void deleteKey(String key) {
+  		key = RedisConstants.REDIS_KEY_PREFIX + key;
+  		key = key.toLowerCase();
+  		LOGGER.info("del key:=> {}", key);
+  		jedisCluster.del(key);
+  }
+
+  public void setRedisValue(String key, String field, String value) {
+  		if (value != null) {
+  			key = RedisConstants.REDIS_KEY_PREFIX + key;
+  			key = key.toLowerCase();
+  			field = field.toLowerCase();
+  			LOGGER.info("hset key:=> {}, field:=> {}, value:=> {}", key, field, value);
+        // 2024-04-30 12:33:18.331  INFO 7766 --- [  restartedMain] com.blot.utils.RedisClusterUtil
+        // : hset key:=> bo:app:ystphbc7754saad, field:=> bundle, value:=> abc.com
+        // hset key:=> bo:app:ystphbc7754saad, field:=> type, value:=> string
+        // hset key:=> bo:app:ystphbc7754saad, field:=> name, value:=> abc
+        // hset key:=> bo:app:ystphbc7754saad, field:=> id, value:=> APP-0001
+  			jedisCluster.hset(key, field, value);
+
+  		}
+  	}
+
+public final static String APPLICATION_KEY_PREFIX = "app:";
+public final static String APP_BUNDLE_ID = "bundle";
+public final static String APP_TYPE = "type";
+public final static String REDIS_KEY_PREFIX = "bo:";
+public final static String APP_NAME = "name";
+public final static String APP_ID = "id";
+public final static String PIPELINE_KEY_SUFFIX = "pipeline:flag";
+public final static String ACTIVATION_KEY_PREFIX = "activation:";
+public final static String TOKEN_KEY_PREFIX = "tkn:";
+
+public void updateAppManifestToRedis(Application application) throws IOException {
+		String key = RedisConstants.MANIFEST_KEY_PREFIX + application.getApiKeyProd();
+    // key = manifest:YSTPHBC7754SAAD
+		if (application.getStatus() != 1 || application.getIsDeleted() == 1) {
+			deleteKey(key);
+		} else {
+			deleteKey(key);
+			List<ManifestAppMapping> allVariableList = manifestAppRepo.queryBy(application.getApplicationId(),
+					Constant.PROD_MODE);
+			List<ManifestVariable> vlist = new ArrayList<ManifestVariable>();
+			allVariableList.stream().forEach(dManifest -> {
+				ManifestVariable m = new ManifestVariable();
+				BeanUtils.copyProperties(dManifest, m);
+				vlist.add(m);
+			});
+
+			List<EventsAppLevel> allSyatemEventList = eventsAppLevelRepository
+					.findAllByApplicationId(application.getApplicationId());
+
+			if (!CollectionUtils.isEmpty(allSyatemEventList)) {
+				Map<Integer, List<EventsAppLevel>> dataWithEvent = new HashMap<>();
+				dataWithEvent = allSyatemEventList.stream().collect(Collectors.groupingBy(EventsAppLevel::getCategory));
+				dataWithEvent.entrySet().stream().forEach(systemEvent -> {
+					ManifestVariable mv = new ManifestVariable();
+					mv.setVariableId(systemEvent.getKey());
+					List<VeriableOption> listOption = new ArrayList<VeriableOption>();
+					List<String> valueList = new ArrayList<String>();
+					systemEvent.getValue().stream().forEach(value -> {
+						if (value.isValue()) {
+							valueList.add(String.valueOf(value.getSubCategory()));
+							VeriableOption veriableOption = new VeriableOption(value.getEventName(),
+									value.getSubCategory(), null);
+							listOption.add(veriableOption);
+						}
+					});
+					mv.setVariableOptions(listOption);
+					mv.setValue(String.join(",", valueList));
+					mv.setVariableDataType(Constant.LIST);
+					mv.setVariableName(Constant.EVENT_MAP.get(systemEvent.getKey()));
+					vlist.add(mv);
+				});
+			}
+
+			hset(RedisConstants.TOKEN_KEY_PREFIX + key, "tl", System.currentTimeMillis());
+      // hset key:=> bo:tkn:manifest:ystphbc7754saad, field:=> tl, value:=> 1714460968255
+			hset(RedisConstants.TOKEN_KEY_PREFIX + key, "value", GenericUtility.convertToByteString(vlist));
+      /* hset key:=> bo:tkn:manifest:ystphbc7754saad, field:=> value, value:=> rO0ABXNyABNqYXZhLnV0aWwuQXJyYXlMaXN0eIHSHZnHYZ0DAAFJAARzaXpleHAAAAADdwQAAAADc3IAKGNvbS5ibG90LmNvbnRyb2xsZXIuZHRvLk1hbmlmZXN0VmFyaWFibGUAAAAAAAAAAQIAB0wAC2Rlc2NyaXB0aW9udAASTGphdmEvbGFuZy9TdHJpbmc7TAAKaXNFZGl0YWJsZXQAE0xqYXZhL2xhbmcvQm9vbGVhbjtMAAV2YWx1ZXEAfgADTAAQdmFyaWFibGVEYXRhVHlwZXQAE0xqYXZhL2xhbmcvSW50ZWdlcjtMAAp2YXJpYWJsZUlkcQB+AAVMAAx2YXJpYWJsZU5hbWVxAH4AA0wAD3ZhcmlhYmxlT3B0aW9uc3QAEExqYXZhL3V0aWwvTGlzdDt4cHQAJFB1YmxpYyBlbmNyeXB0aW9uIGtleSBmb3IgUElJIGV2ZW50c3NyABFqYXZhLmxhbmcuQm9vbGVhbs0gcoDVnPruAgABWgAFdmFsdWV4cAB0ANhNSUdmTUEwR0NTcUdTSWIzRFFFQkFRVUFBNEdOQURDQmlRS0JnUUNrclRveEZEMlA5bGFXcEZuRjhHNHIwamwxOXhlZHNEaGxhemxrSDZXTmV5bkhsS1BDY2pmRVN1UndDMGUrQWFtbTBBOXFabVNGYW9JQUIwR1ZXQ053dGF0TXdlTU0rbUFxanpYZFlucUtWa1c5L3pmcnNMYis0QW9TWGhJdWdQSjdRTnF2UXBGNEhYM0wrUVV3bUJ5SW5xSkVoc0tqQU05NiswQW83Q1hxN3dJREFRQUJzcgARamF2YS5sYW5nLkludGVnZXIS4qCk94GHOAIAAUkABXZhbHVleHIAEGphdmEubGFuZy5OdW1iZXKGrJUdC5TgiwIAAHhwAAAABnNxAH4ADAAAF250AA5QSUlfUHVibGljX0tleXBzcQB+AAJ0ACRQdWJsaWMgZW5jcnlwdGlvbiBrZXkgZm9yIFBISSBldmVudHNxAH4ACnQA2E1JR2ZNQTBHQ1NxR1NJYjNEUUVCQVFVQUE0R05BRENCaVFLQmdRQ21EUktqdkI4bUNxY2FmUEFGZko3MGVaZE15L3YrR2htaEFzOWo0c2tNZlhIWm43WjNHd2hhc0QrbDF0b2g0aTlFaUZMcytsc2ZQSjZiWW5VRWR4UUZoajA3TktPOVJQaDdJdy9tR3R4THY4cU0rcjExQXdsMmw3WWdKdHVuWG1YSkY0ZEh4bUJneFRSRFlmOWtpaUxuWjRSYnR3OHRMOUNmdzk5RHAwVEtTUUlEQVFBQnEAfgAOc3EAfgAMAAAXbXQADlBISV9QdWJsaWNfS2V5cHNxAH4AAnBwdAAFMTExMTlzcQB+AAwAAAAHc3EAfgAMAAATiXQAEVNES19TeXN0ZW1fRXZlbnRzc3EAfgAAAAAAAXcEAAAAAXNyACZjb20uYmxvdC5jb250cm9sbGVyLmR0by5WZXJpYWJsZU9wdGlvbmip/j/xw775AgADTAADa2V5dAAQTGphdmEvbGFuZy9Mb25nO0wABWxhYmVscQB+AANMAANvcHRxAH4ABHhwc3IADmphdmEubGFuZy5Mb25nO4vkkMyPI98CAAFKAAV2YWx1ZXhxAH4ADQAAAAAAACtvdAAFQ2xpY2tweHg=
+      */
+    }
+
+	}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+2.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
